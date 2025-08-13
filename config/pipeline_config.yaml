@@ -1,0 +1,185 @@
+# VT1/VT2 Prediction Pipeline Configuration
+
+# Data paths
+data:
+  raw_data_path: "data/raw/cycling_train.csv"
+  processed_data_path: "data/processed/"
+  train_data_path: "data/processed/train_data.csv"
+  test_data_path: "data/processed/test_data.csv"
+  feature_engineered_path: "data/processed/feature_engineered_data.csv"
+
+# Feature engineering settings
+feature_engineering:
+  # Demographic features
+  demographics:
+    include_bmi: true
+    include_age_groups: true
+    age_group_bins: [20, 30, 40, 50, 60, 70]
+    include_gender_encoding: true
+    
+  # Statistical features from time series
+  statistical_features:
+    include_percentiles: true
+    percentiles: [10, 25, 50, 75, 90]
+    include_skewness: true
+    include_kurtosis: true
+    include_entropy: true
+    include_autocorrelation: true
+    autocorrelation_lags: [1, 2, 3, 5]
+    
+  # Ratio features
+  ratio_features:
+    include_hr_speed_ratio: true
+    include_gain_speed_ratio: true
+    include_hr_gain_ratio: true
+    include_hr_variability: true  # hr_std/hr_mean
+    
+  # Interaction features
+  interaction_features:
+    include_age_weight_interaction: true
+    include_age_height_interaction: true
+    include_weight_height_interaction: true
+    include_hr_speed_interaction: true
+    
+  # Polynomial features
+  polynomial_features:
+    enabled: true
+    degree: 2
+    include_features: ["age", "weight", "height", "hr_mean", "speed_mean"]
+    
+  # Domain-specific features
+  domain_features:
+    include_hr_reserve: true  # hr_mean - hr_rest
+    include_speed_efficiency: true  # speed_mean / hr_mean
+    include_gain_efficiency: true  # gain_mean / speed_mean
+    include_hr_response: true  # (hr_mean - hr_rest) / speed_mean
+
+# Data augmentation settings
+data_augmentation:
+  enabled: true
+  augmentation_factor: 3  # Number of augmented samples per original sample
+  
+  # TSAug settings
+  tsaug:
+    # Time warping
+    time_warping:
+      enabled: true
+      probability: 0.5
+      strength: 0.1
+      
+    # Magnitude warping
+    magnitude_warping:
+      enabled: true
+      probability: 0.5
+      strength: 0.1
+      
+    # Jittering
+    jittering:
+      enabled: true
+      probability: 0.3
+      strength: 0.05
+      
+    # Scaling
+    scaling:
+      enabled: true
+      probability: 0.4
+      strength: 0.1
+      
+    # Rotation
+    rotation:
+      enabled: true
+      probability: 0.2
+      strength: 0.05
+      
+    # Permutation
+    permutation:
+      enabled: true
+      probability: 0.1
+      segment_size: 0.1
+
+# Oversampling settings
+oversampling:
+  enabled: true
+  method: "smote"  # Options: "smote", "adasyn", "random_oversampling"
+  k_neighbors: 5
+  random_state: 42
+
+# Data preprocessing
+preprocessing:
+  # Scaling
+  scaling:
+    method: "robust"  # Options: "standard", "robust", "minmax", "none"
+    
+  # Feature selection
+  feature_selection:
+    enabled: true
+    method: "mutual_info"  # Options: "mutual_info", "f_regression", "rfe"
+    n_features: 50
+    
+  # Outlier detection
+  outlier_detection:
+    enabled: true
+    method: "isolation_forest"  # Options: "isolation_forest", "local_outlier_factor", "elliptic_envelope"
+    contamination: 0.1
+
+# Model settings
+model:
+  # Target variables
+  targets: ["vt1", "vt2"]
+  
+  # Model type
+  model_type: "regression"  # Options: "regression", "classification"
+  
+  # Algorithms to try
+  algorithms:
+    - "random_forest"
+    - "xgboost"
+    - "lightgbm"
+    - "elastic_net"
+    - "svr"
+    
+  # Cross-validation
+  cv:
+    method: "kfold"
+    n_splits: 5
+    random_state: 42
+    
+  # Hyperparameter tuning
+  hyperparameter_tuning:
+    enabled: true
+    method: "random_search"  # Options: "grid_search", "random_search", "bayesian"
+    n_iterations: 50
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - "mae"
+    - "mse"
+    - "rmse"
+    - "r2"
+    - "mape"
+    
+  # Feature importance
+  feature_importance:
+    enabled: true
+    method: "permutation"  # Options: "permutation", "shap"
+    
+  # Residual analysis
+  residual_analysis:
+    enabled: true
+
+# Output settings
+output:
+  save_model: true
+  model_path: "models/"
+  save_predictions: true
+  predictions_path: "data/processed/predictions.csv"
+  save_feature_importance: true
+  feature_importance_path: "reports/feature_importance.csv"
+  save_evaluation_report: true
+  evaluation_report_path: "reports/evaluation_report.csv"
+
+# Logging
+logging:
+  level: "INFO"
+  log_file: "logs/pipeline.log"
