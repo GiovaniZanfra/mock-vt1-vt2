@@ -19,6 +19,48 @@ INTERIM_FEATURES_FILE = DATA_INTERIM / "features.csv"
 INTERIM_TARGETS_FILE = DATA_INTERIM / "targets.csv"
 INTERIM_DATA_FILE = DATA_INTERIM / "interim_data.csv"
 
+# External data source (for populating raw/)
+# Allow overriding via environment variables to play with pipeline params
+DATA_SOURCE_ROOT = Path(os.getenv("CRF_DATA_SOURCE_ROOT", "/home/g-brandao/workspace/crf-data"))
+SOURCE_V3_SUBFOLDER = os.getenv("CRF_V3_SUBFOLDER", "v3")
+SOURCE_METADATA_SUBFOLDER = os.getenv("CRF_METADATA_SUBFOLDER", "metadata")
+
+# Helper to parse comma-separated environment variables
+
+def _parse_list_env(var_name: str, default_list):
+    value = os.getenv(var_name)
+    if value:
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return list(default_list)
+
+# Protocols and candidate columns (tunable via env)
+PROTOCOLS = _parse_list_env("CRF_PROTOCOLS", ["obk1"])  # Example default
+HR_CANDIDATE_COLUMNS = _parse_list_env(
+    "CRF_HR_CANDIDATES",
+    [
+        "cola-gw6_polar_hr",
+        "cola-gw6_vo2max_hr",
+        "cola-gw5_polar_hr",
+        "cola-gw5_vo2max_hr",
+    ],
+)
+SPEED_CANDIDATE_COLUMNS = _parse_list_env(
+    "CRF_SPEED_CANDIDATES",
+    [
+        "cola-gw6_gps_speed",
+        "cola-gw6_vo2max_gps-speed",
+        "cola-gw5_gps_speed",
+        "cola-gw5_vo2max_gps-speed",
+    ],
+)
+
+# Metadata file stems that carry maximal info
+MAXIMAL_FILENAMES = set(_parse_list_env("CRF_MAXIMAL_STEMS", ["maximal", "maximal_bk"]))
+
+# Preferred raw parquet outputs
+RAW_DATA_PARQUET_FILE = DATA_RAW / "raw.parquet"
+MERGED_METADATA_PARQUET_FILE = DATA_RAW / "merged_metadata.parquet"
+
 # Model parameters
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
@@ -76,5 +118,5 @@ LSTM_PARAMS = {
 }
 
 # Ensure directories exist
-for directory in [DATA_PROCESSED, DATA_INTERIM, MODELS_DIR, REPORTS_DIR]:
+for directory in [DATA_PROCESSED, DATA_INTERIM, DATA_RAW, MODELS_DIR, REPORTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)

@@ -13,6 +13,7 @@ tsaug>=0.2.1
 imbalanced-learn>=0.10.0
 
 # Visualization
+pyarrow>=12.0.0
 matplotlib>=3.5.0
 seaborn>=0.11.0
 

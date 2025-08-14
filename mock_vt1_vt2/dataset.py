@@ -1,162 +1,195 @@
 """
-Data processing pipeline for vt1 and vt2 prediction.
-Moves data from raw to interim following cookie cutter data science rules.
+Data ingestion pipeline for populating data/raw/ using external metadata + time series.
+Refactored to follow cookie-cutter data science and configurable via mock_vt1_vt2.config.
 """
 
-import pandas as pd
-import numpy as np
 from pathlib import Path
+from typing import List, Optional
 import logging
-from typing import Tuple, Optional
-import warnings
-warnings.filterwarnings('ignore')
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+import numpy as np
+import pandas as pd
+
+from .config import (
+    DATA_SOURCE_ROOT,
+    SOURCE_V3_SUBFOLDER,
+    SOURCE_METADATA_SUBFOLDER,
+    PROTOCOLS,
+    HR_CANDIDATE_COLUMNS,
+    SPEED_CANDIDATE_COLUMNS,
+    MAXIMAL_FILENAMES,
+    DATA_RAW,
+    RAW_DATA_PARQUET_FILE,
+    MERGED_METADATA_PARQUET_FILE,
+)
+
 logger = logging.getLogger(__name__)
 
-def load_raw_data() -> pd.DataFrame:
-    """
-    Load raw data from data/raw/raw.csv
-    """
-    raw_data_path = Path("data/raw/raw.csv")
-    logger.info(f"Loading raw data from {raw_data_path}")
-    
-    try:
-        # Try to read with different encodings and separators
-        df = pd.read_csv(raw_data_path)
-        logger.info(f"Successfully loaded data with shape: {df.shape}")
-        logger.info(f"Columns: {list(df.columns)}")
-        return df
-    except Exception as e:
-        logger.error(f"Error loading data: {e}")
-        raise
 
-def explore_data_structure(df: pd.DataFrame) -> None:
-    """
-    Explore the structure of the raw data
-    """
-    logger.info("=== Data Structure Exploration ===")
-    logger.info(f"Shape: {df.shape}")
-    logger.info(f"Columns: {list(df.columns)}")
-    logger.info(f"Data types:\n{df.dtypes}")
-    logger.info(f"Missing values:\n{df.isnull().sum()}")
-    
-    # Check for vt1 and vt2 columns
-    vt_columns = [col for col in df.columns if 'vt1' in col.lower() or 'vt2' in col.lower()]
-    if vt_columns:
-        logger.info(f"Found VT columns: {vt_columns}")
-    else:
-        logger.info("No VT columns found - they might be target variables to predict")
-    
-    # Show first few rows
-    logger.info(f"First 5 rows:\n{df.head()}")
+def list_metadata_parquets(
+    root: Path = DATA_SOURCE_ROOT,
+    metadata_subfolder: str = SOURCE_METADATA_SUBFOLDER,
+) -> List[Path]:
+    """List available metadata parquet files from the external source."""
+    p = root / metadata_subfolder
+    if not p.exists():
+        raise FileNotFoundError(f"Metadata folder not found: {p}")
+    return sorted(list(p.glob("*.parquet")))
 
-def process_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Process the raw data and split into features and targets
-    """
-    logger.info("Processing data...")
-    
-    # Make a copy to avoid modifying original
-    df_processed = df.copy()
-    
-    # Parse string representations of lists in hr and speed columns
-    import ast
-    
-    # Parse hr column if it exists
-    if 'hr' in df_processed.columns:
-        logger.info("Parsing hr column...")
-        try:
-            df_processed['hr'] = df_processed['hr'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-        except Exception as e:
-            logger.warning(f"Could not parse hr column: {e}")
-    
-    # Parse speed column if it exists
-    if 'speed' in df_processed.columns:
-        logger.info("Parsing speed column...")
-        try:
-            df_processed['speed'] = df_processed['speed'].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
-        except Exception as e:
-            logger.warning(f"Could not parse speed column: {e}")
-    
-    # Check if vt1 and vt2 are in the data
-    vt1_col = None
-    vt2_col = None
-    
-    for col in df_processed.columns:
-        if 'vt1' in col.lower():
-            vt1_col = col
-        elif 'vt2' in col.lower():
-            vt2_col = col
-    
-    # If vt1 and vt2 are not found, we'll need to create them or they're targets
-    if vt1_col is None or vt2_col is None:
-        logger.info("VT1 and VT2 not found in data - assuming they are target variables")
-        # For now, let's assume the last two columns are targets
-        # This will need to be adjusted based on actual data structure
-        if len(df_processed.columns) >= 2:
-            vt1_col = df_processed.columns[-2]
-            vt2_col = df_processed.columns[-1]
-            logger.info(f"Using {vt1_col} and {vt2_col} as target variables")
-    
-    # Separate features and targets
-    if vt1_col and vt2_col:
-        target_cols = [vt1_col, vt2_col]
-        feature_cols = [col for col in df_processed.columns if col not in target_cols]
-        
-        X = df_processed[feature_cols]
-        y = df_processed[target_cols]
-        
-        logger.info(f"Features shape: {X.shape}")
-        logger.info(f"Targets shape: {y.shape}")
-        
-        return X, y
-    else:
-        logger.warning("Could not identify target columns")
-        return df_processed, pd.DataFrame()
 
-def save_interim_data(X: pd.DataFrame, y: pd.DataFrame) -> None:
+def load_all_metadata(meta_files: List[Path]) -> pd.DataFrame:
+    """Load and merge all metadata parquet files.
+
+    - Files named in MAXIMAL_FILENAMES are treated specially and merged on 'sid'.
+    - Other files are merged successively on 'idx'.
+    - Returns a single merged metadata DataFrame with a 'sid' column derived from 'idx'.
     """
-    Save interim data to data/interim/
+    maximal_df = None
+    maximal_bk_df = None
+    metadata = None
+
+    for fp in meta_files:
+        stem = fp.stem.lower()
+        if stem == "maximal":
+            maximal_df = pd.read_parquet(fp)
+            continue
+        if stem == "maximal_bk":
+            maximal_bk_df = pd.read_parquet(fp)
+            continue
+
+        df = pd.read_parquet(fp)
+
+        # Incremental outer merge on 'idx'
+        if metadata is None:
+            metadata = df.copy()
+        else:
+            metadata = metadata.merge(df, on="idx", how="outer", suffixes=("", f"_{stem}"))
+
+    if metadata is None or maximal_bk_df is None or maximal_df is None:
+        raise ValueError("Metadata not found, merged metadata files returned None.")
+
+    # Merge maximal info on 'sid'
+    maximal = maximal_df.merge(maximal_bk_df, how="outer", on="sid", suffixes=("_running", "_cycling"))
+    metadata["sid"] = metadata["idx"].str.split("-").str[0]
+    merged_metadata = metadata.merge(maximal, on="sid", how="left", suffixes=("", "_maximal"))
+
+    # Save for inspection
+    MERGED_METADATA_PARQUET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    merged_metadata.to_parquet(MERGED_METADATA_PARQUET_FILE, index=False)
+    logger.info(f"Saved merged metadata to {MERGED_METADATA_PARQUET_FILE}")
+
+    return merged_metadata
+
+
+def filter_by_protocol(meta: pd.DataFrame, protocol_list: Optional[List[str]] = None) -> pd.DataFrame:
+    """Filter metadata by protocol codes present in 'idx' (after splitting by '-')."""
+    if protocol_list is None:
+        protocol_list = list(PROTOCOLS)
+    meta_ = meta.copy()
+    meta_["protocol"] = meta_["idx"].str.split("-").str[1]
+    meta__filt = meta_.query("protocol in @protocol_list").drop("protocol", axis=1)
+    if meta__filt.empty:
+        raise ValueError(f"Protocols {protocol_list} not found on metadata files.")
+    return meta__filt
+
+
+def extract_hr_from_ts(path: Path, hr_cols: List[str]) -> np.ndarray:
+    """Extract HR series from a time-series CSV by trying candidate columns in order."""
+    ts = pd.read_csv(path)
+    for col in hr_cols:
+        if col in ts:
+            return np.array(ts[col])
+    logger.info(
+        f"HR columns {hr_cols} not found for idx {path.stem}. Candidates present: {[c for c in ts.columns if 'hr' in c.lower()]}"
+    )
+    return np.array([])
+
+
+def extract_speed_from_ts(path: Path, speed_cols: List[str]) -> np.ndarray:
+    """Extract speed series from a time-series CSV by trying candidate columns in order."""
+    ts = pd.read_csv(path)
+    for col in speed_cols:
+        if col in ts:
+            return np.array(ts[col])
+    logger.info(
+        f"Speed columns {speed_cols} not found for idx {path.stem}. Candidates present: {[c for c in ts.columns if 'speed' in c.lower()]}"
+    )
+    return np.array([])
+
+
+def merge_metadata_and_series(
+    protocol_list: Optional[List[str]] = None,
+    hr_cols: Optional[List[str]] = None,
+    speed_cols: Optional[List[str]] = None,
+    root: Path = DATA_SOURCE_ROOT,
+    v3_subfolder: str = SOURCE_V3_SUBFOLDER,
+    metadata_subfolder: str = SOURCE_METADATA_SUBFOLDER,
+    keep_series_in_memory: bool = True,
+) -> pd.DataFrame:
+    """Merge metadata with HR and speed time series extracted from CSV files under v3/.
+
+    Returns a DataFrame with columns including 'idx', 'sid', metadata fields, and 'hr', 'speed' arrays.
     """
-    interim_dir = Path("data/interim")
-    interim_dir.mkdir(exist_ok=True)
-    
-    # Save features
-    X.to_csv(interim_dir / "features.csv", index=False)
-    logger.info(f"Saved features to {interim_dir / 'features.csv'}")
-    
-    # Save targets
-    if not y.empty:
-        y.to_csv(interim_dir / "targets.csv", index=False)
-        logger.info(f"Saved targets to {interim_dir / 'targets.csv'}")
-    
-    # Save combined data
-    if not y.empty:
-        combined = pd.concat([X, y], axis=1)
-        combined.to_csv(interim_dir / "interim_data.csv", index=False)
-        logger.info(f"Saved combined data to {interim_dir / 'interim_data.csv'}")
+    if protocol_list is None:
+        protocol_list = list(PROTOCOLS)
+    if hr_cols is None:
+        hr_cols = list(HR_CANDIDATE_COLUMNS)
+    if speed_cols is None:
+        speed_cols = list(SPEED_CANDIDATE_COLUMNS)
+
+    meta_files = list_metadata_parquets(root, metadata_subfolder)
+    logger.info(f"Found {len(meta_files)} metadata files in {root / metadata_subfolder}.")
+    meta = load_all_metadata(meta_files)
+    if meta.empty:
+        raise ValueError("No metadata files loaded. Verify .parquet files in the metadata folder")
+    meta_filt = filter_by_protocol(meta, protocol_list)
+    logger.info(
+        f"All metadata merged and filtered using {protocol_list}. {len(meta)} -> {len(meta_filt)} rows."
+    )
+
+    v3_root = root / v3_subfolder
+    if not v3_root.exists():
+        raise FileNotFoundError(f"V3 folder not found: {v3_root}")
+
+    # Collect available CSV series for selected idx
+    selected_idx = set(meta_filt.idx.tolist())
+    csv_paths = [path for path in v3_root.rglob("*.csv") if path.stem in selected_idx]
+    logger.info(f"Found {len(csv_paths)} time series CSV files under {v3_root} for selected sessions.")
+
+    timeseries_data = []
+    for path in csv_paths:
+        aux = {"idx": path.stem}
+        hr_arr = extract_hr_from_ts(path, hr_cols)
+        speed_arr = extract_speed_from_ts(path, speed_cols)
+        # Convert to lists to ensure parquet compatibility
+        aux["hr"] = hr_arr.tolist()
+        aux["speed"] = speed_arr.tolist()
+        if keep_series_in_memory:
+            aux["_ts_path"] = str(path)
+        timeseries_data.append(aux)
+
+    timeseries_df = pd.DataFrame(timeseries_data)
+    raw_data = meta_filt.merge(timeseries_df, on="idx", how="left")
+    logger.info(
+        f"Raw data concluded with {len(raw_data)} rows. {len(raw_data.dropna(subset=('hr', 'speed')))} rows have both speed and hr series."
+    )
+    return raw_data
+
+
+def save_raw_data(raw_df: pd.DataFrame, output_path: Path = RAW_DATA_PARQUET_FILE) -> None:
+    """Save raw combined data as parquet to preserve arrays."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_df.to_parquet(output_path, index=False)
+    logger.info(f"Saved raw data to {output_path}")
+
 
 def main():
-    """
-    Main data processing pipeline
-    """
-    logger.info("Starting data processing pipeline...")
-    
-    # Load raw data
-    df = load_raw_data()
-    
-    # Explore data structure
-    explore_data_structure(df)
-    
-    # Process data
-    X, y = process_data(df)
-    
-    # Save interim data
-    save_interim_data(X, y)
-    
-    logger.info("Data processing pipeline completed!")
+    """Entry point to populate data/raw from the external source using configured parameters."""
+    logger.info("Starting raw data ingestion pipeline...")
+    raw_df = merge_metadata_and_series()
+    save_raw_data(raw_df)
+    logger.info("Raw data ingestion completed!")
+
 
 if __name__ == "__main__":
     main()
