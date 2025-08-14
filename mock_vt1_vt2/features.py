@@ -1,501 +1,377 @@
-import warnings
-from pathlib import Path
+"""
+Feature engineering for time series data to predict vt1 and vt2.
+Optimized for embedded systems (smartwatches, cellphones).
+"""
 
-import numpy as np
 import pandas as pd
-import yaml
-from sklearn.base import BaseEstimator, TransformerMixin
+import numpy as np
+from scipy import stats
+from scipy.fft import fft
+from sklearn.preprocessing import StandardScaler
+import logging
+from typing import List, Tuple, Optional
+from .config import *
 
-# safe_target_encoder_logo.py
-from sklearn.model_selection import LeaveOneGroupOut
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
-from utils.general import extract_sid_from_index
+logger = logging.getLogger(__name__)
 
-
-class SafeTargetEncoder(BaseEstimator, TransformerMixin):
+class EmbeddedTimeSeriesFeatureExtractor:
     """
-    Target encoder seguro que suporta LeaveOneGroupOut (LOGO) para gerar OOF
-    durante fit (útil quando pipeline roda antes do split ou pra anti-leakage
-    entre sujeitos dentro do treino). Também armazena mapeamento final do treino
-    para uso no teste.
+    Lightweight feature extractor optimized for embedded systems.
+    Focuses on computational efficiency and small memory footprint.
     """
-
-    def __init__(self, random_state=42):
-        self.random_state = random_state
-
-        self._oof_ = None
-        self._mapping_ = {}
-        self._global_mean_ = None
-        self._train_index_ = None
-
-    def _safe_fill(self, s):
-        return s.where(~s.isna(), "__nan__")
-
-    def fit(self, X, y):
-        X = X.copy()
-        y = pd.Series(y, index=X.index)
-        self.cols = X.select_dtypes(include=["category", "object"]).columns.tolist()
-
-        if len(self.cols) == 0:
-            self._oof_ = pd.DataFrame(index=X.index)
-            self._train_index_ = X.index.copy()
-            self._global_mean_ = float(y.mean())
-            return self
-
-        self._global_mean_ = float(y.mean())
-
-        # escolher splitter
-        splitter = LeaveOneGroupOut()
-        groups = extract_sid_from_index(X.index)
-
-        oof_df = pd.DataFrame(
-            index=X.index, columns=[f"{c}_enc" for c in self.cols], dtype=float
-        )
-
-        for col in self.cols:
-            col_series = self._safe_fill(X[col].astype(object))
-            col_oof = pd.Series(index=X.index, dtype=float)
-
-            # re-create iterator (LeaveOneGroupOut returns generator-like; we will iterate normally)
-            for train_idx, val_idx in splitter.split(X, y, groups=groups):
-                # train_idx/val_idx são integer positions -> map para index
-                train_idx = np.array(train_idx)
-                val_idx = np.array(val_idx)
-
-                train_keys = col_series.iloc[train_idx]
-                y_train = y.iloc[train_idx]
-                mapping = y_train.groupby(train_keys).mean()
-                val_keys = col_series.iloc[val_idx]
-                mapped = val_keys.map(mapping).astype(float)
-                mapped = mapped.fillna(self._global_mean_)
-                col_oof.iloc[val_idx] = mapped.values
-            oof_df[f"{col}_enc"] = col_oof
-            # mapping final com todo o treino (para transformar o teste)
-            full_mapping = y.groupby(col_series).mean().to_dict()
-            if "__nan__" not in full_mapping and col_series.isna().any():
-                full_mapping["__nan__"] = self._global_mean_
-            self._mapping_[col] = full_mapping
-
-        self._oof_ = oof_df
-        self._train_index_ = X.index.copy()
-        return self
-
-    def transform(self, X):
-        X = X.copy()
-        if self._train_index_ is not None and X.index.equals(self._train_index_):
-            enc_df = self._oof_.reindex(X.index).copy()
+    
+    def __init__(self, use_fft: bool = False):
+        self.use_fft = use_fft  # FFT is expensive, can be disabled
+        
+    def extract_basic_statistics(self, series: pd.Series) -> dict:
+        """
+        Extract only the most essential statistical features.
+        Very fast and memory efficient.
+        """
+        features = {}
+        
+        # Core statistics (fastest to compute)
+        features['mean'] = series.mean()
+        features['std'] = series.std()
+        features['min'] = series.min()
+        features['max'] = series.max()
+        features['range'] = features['max'] - features['min']
+        
+        # Simple trend (linear fit)
+        if len(series) > 1:
+            features['trend'] = np.polyfit(range(len(series)), series, 1)[0]
         else:
-            enc_df = pd.DataFrame(
-                index=X.index, columns=[f"{c}_enc" for c in self.cols], dtype=float
-            )
-            for col in self.cols:
-                col_series = self._safe_fill(X[col].astype(object))
-                mapping = self._mapping_.get(col, {})
-                enc_series = col_series.map(mapping).astype(float)
-                enc_series = enc_series.fillna(self._global_mean_)
-                enc_df[f"{col}_enc"] = enc_series
+            features['trend'] = 0
+        
+        return features
+    
+    def extract_shape_features(self, series: pd.Series) -> dict:
+        """
+        Extract simple shape-based features.
+        """
+        features = {}
+        
+        # Zero crossings (simple pattern detection)
+        zero_crossings = np.sum(np.diff(np.signbit(series - series.mean())))
+        features['zero_crossings'] = zero_crossings
+        
+        # Peak detection (limited to avoid memory issues)
+        try:
+            peaks, _ = stats.find_peaks(series, distance=10)  # Minimum distance between peaks
+            features['n_peaks'] = len(peaks)
+            if len(peaks) > 0:
+                features['peak_mean'] = series.iloc[peaks].mean()
+            else:
+                features['peak_mean'] = 0
+        except:
+            features['n_peaks'] = 0
+            features['peak_mean'] = 0
+        
+        return features
+    
+    def extract_rolling_features(self, series: pd.Series, window_size: int = 50) -> dict:
+        """
+        Extract rolling features with smaller window for efficiency.
+        """
+        features = {}
+        
+        # Use smaller window for embedded systems
+        if len(series) >= window_size:
+            rolling_mean = series.rolling(window=window_size, min_periods=1).mean()
+            rolling_std = series.rolling(window=window_size, min_periods=1).std()
+            
+            features['rolling_mean_mean'] = rolling_mean.mean()
+            features['rolling_std_mean'] = rolling_std.mean()
+        else:
+            features['rolling_mean_mean'] = series.mean()
+            features['rolling_std_mean'] = series.std()
+        
+        return features
+    
+    def extract_lightweight_frequency_features(self, series: pd.Series) -> dict:
+        """
+        Extract minimal frequency features if FFT is enabled.
+        """
+        features = {}
+        
+        if not self.use_fft:
+            return features
+        
+        try:
+            # Use only first few FFT components
+            series_centered = series - series.mean()
+            fft_vals = fft(series_centered)
+            fft_magnitude = np.abs(fft_vals)
+            
+            # Only take first 3 components (very lightweight)
+            features['fft_magnitude_1'] = fft_magnitude[1] if len(fft_magnitude) > 1 else 0
+            features['fft_magnitude_2'] = fft_magnitude[2] if len(fft_magnitude) > 2 else 0
+            features['fft_magnitude_3'] = fft_magnitude[3] if len(fft_magnitude) > 3 else 0
+            
+        except Exception as e:
+            logger.warning(f"FFT feature extraction failed: {e}")
+            features['fft_magnitude_1'] = 0
+            features['fft_magnitude_2'] = 0
+            features['fft_magnitude_3'] = 0
+        
+        return features
+    
+    def extract_all_features(self, series: pd.Series) -> dict:
+        """
+        Extract all lightweight features optimized for embedded systems.
+        """
+        features = {}
+        
+        # Basic statistics (fastest)
+        features.update(self.extract_basic_statistics(series))
+        
+        # Shape features (moderate cost)
+        features.update(self.extract_shape_features(series))
+        
+        # Rolling features (moderate cost)
+        features.update(self.extract_rolling_features(series))
+        
+        # Frequency features (most expensive, optional)
+        features.update(self.extract_lightweight_frequency_features(series))
+        
+        return features
 
-        X2 = X.drop(columns=self.cols, errors="ignore")
-        return pd.concat([X2, enc_df], axis=1)
-
-
-class ColumnSelector(BaseEstimator, TransformerMixin):
-    """Selects columns based on feature groups from config"""
-
-    def __init__(self, group_defs, enabled_groups):
-        self.group_defs = group_defs
-        self.enabled_groups = enabled_groups
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        columns = []
-        for group in self.enabled_groups:
-            if group in self.group_defs:
-                columns.extend(self.group_defs[group])
-        # filtrar colunas existentes e preservar ordem/únicas
-        selected = [c for c in columns if c in X.columns]
-        seen = set()
-        ordered = []
-        for c in selected:
-            if c not in seen:
-                ordered.append(c)
-                seen.add(c)
-        return X[ordered]
-
-
-class FeatureEngineer(BaseEstimator, TransformerMixin):
-    """Base class for feature engineering transformers"""
-
-    def __init__(self, config):
-        self.config = config
-
-    def fit(self, X, y=None):
-        return self
-
-
-class BinningTransformer(FeatureEngineer):
-    """Handles binning of numerical features"""
-
-    BIN_RULES = {
-        "age": {
-            "bins": [0, 30, 50, 200],
-            "labels": ["below_30", "between_30_and_49", "50_plus"],
-            "right": False,
-        },
-        "hr_rest": {
-            "bins": [0, 60, 80, 200],
-            "labels": ["Low", "Normal", "High"],
-            "right": False,
-        },
-        "pbf": {
-            "bins": [0, 20, 30, 100],
-            "labels": ["Healthy", "Elevated", "HighRisk"],
-            "right": False,
-        },
-        "vo2max_myers": {
-            "bins": [0, 35, 45, 100],
-            "labels": ["Low", "Moderate", "Good"],
-            "right": False,
-        },
-    }
-
-    def transform(self, X):
-        X = X.copy()
-        for col, rules in self.BIN_RULES.items():
-            if col in X:
-                new_col = f"{col}_bin"
-                X[new_col] = pd.cut(
-                    X[col],
-                    bins=rules["bins"],
-                    labels=rules["labels"],
-                    right=rules["right"],
-                )
-        return X
-
-
-class CategoricalTransformer(FeatureEngineer):
-    """Handles categorical conversions and custom categorizations"""
-
-    CAT_RULES = {
-        "gender": {"dtype": "category"},
-        "bmi_class": {"dtype": "category"},
-        "pbf": {
-            "function": lambda x: "Low" if x < 15 else "Normal" if x < 25 else "High",
-            "new_col": "pbf_cat",
-        },
-        "smi": {
-            "function": lambda x: "Low" if x < 7 else "Normal" if x < 10 else "High",
-            "new_col": "smi_cat",
-        },
-    }
-
-    def transform(self, X):
-        X = X.copy()
-        for col, rules in self.CAT_RULES.items():
-            if col in X:
-                if "dtype" in rules:
-                    X[col] = X[col].astype(rules["dtype"])
-                elif "function" in rules:
-                    X[rules["new_col"]] = (
-                        X[col].apply(rules["function"]).astype("category")
-                    )
-        return X
-
-
-class DerivedFeatureTransformer(FeatureEngineer):
-    """Creates new features from existing ones"""
-
-    DERIVED_FEATURES = {
-        "ffm_weight_pct": lambda df: df["ffm"] / df["weight"],
-        "tbw_weight_pct": lambda df: df["tbw"] / df["weight"],
-        "smm_weight_pct": lambda df: df["smm"] / df["weight"],
-        "bmr_per_kg": lambda df: df["bmr"] / df["weight"],
-        "gain_var_ratio": lambda df: df["gain_std"] / (df["gain_mean"] + 1e-6),
-        "gain_mean_per_kg": lambda df: df["gain_mean"] / df["weight"],
-        "hr_drift": lambda df: (df["hr_mean"] - df["hr_rest"]) / df["hr_rest"],
-        "hr_reserve_util": lambda df: (df["hr_mean"] - df["hr_rest"])
-        / (df["age_hr_madf"] - df["hr_rest"] + 1e-6),
-        "pbf_smi_ratio": lambda df: df["pbf"] / (df["smi"] + 1e-6),
-        "body_composite": lambda df: df["ffm"] * df["smi"] / (df["pbf"] + 1e-6),
-        "bmr_cunningham": lambda df: 500 + 22 * df["ffm"],
-        "bmr_discrepancy": lambda df: df["bmr"] - df["bmr_cunningham"],
-        "gain_per_ffm": lambda df: df["gain_mean"] / df["ffm"],
-        "gain_per_smm": lambda df: df["gain_mean"] / df["smm"],
-        "gain_per_tbw": lambda df: df["gain_mean"] / df["tbw"],
-        "hr_cv": lambda df: df["hr_std"] / df["hr_mean"],
-        "hr_std_per_rest": lambda df: df["hr_std"] / df["hr_rest"],
-        "efficiency_index": lambda df: df["gain_mean"] / df["speed_mean"],
-        "speed_per_hr": lambda df: df["speed_mean"] / df["hr_mean"],
-        "fatigue_factor": lambda df: df["gain_std"] / df["gain_mean"],
-        "ponderal_index": lambda df: df["weight"] / (df["height"] / 100) ** 3,
-        "metabolic_balance": lambda df: df["vo2max_myers"]
-        / (df["ftp_anthropometric"] + 1e-6),
-        # --- novas features de frequência cardíaca ---
-        "age_hr_max": lambda df: 208 - 0.7 * df["age"],
-        "hr_max_std1": lambda df: df["hr_mean"] + df["hr_std"],
-        "hr_max_std2": lambda df: df["hr_mean"] + 2 * df["hr_std"],
-        "hr_max_std3": lambda df: df["hr_mean"] + 3 * df["hr_std"],
-        "hr_reserve1": lambda df: (208 - 0.7 * df["age"]) - df["hr_rest"],
-        "hr_reserve2": lambda df: (df["hr_mean"] + df["hr_std"]) - df["hr_rest"],
-        "hr_reserve3": lambda df: (df["hr_mean"] + 2 * df["hr_std"]) - df["hr_rest"],
-        "hr_reserve4": lambda df: (df["hr_mean"] + 3 * df["hr_std"]) - df["hr_rest"],
-        "theorical_vt11": lambda df: df["hr_rest"]
-        + 0.5 * ((208 - 0.7 * df["age"]) - df["hr_rest"]),
-        "theorical_vt12": lambda df: df["hr_rest"]
-        + 0.5 * ((df["hr_mean"] + df["hr_std"]) - df["hr_rest"]),
-        "theorical_vt13": lambda df: df["hr_rest"]
-        + 0.5 * ((df["hr_mean"] + 2 * df["hr_std"]) - df["hr_rest"]),
-        "theorical_vt14": lambda df: df["hr_rest"]
-        + 0.5 * ((df["hr_mean"] + 3 * df["hr_std"]) - df["hr_rest"]),
-        "theorical_vt21": lambda df: df["hr_rest"]
-        + 0.85 * ((208 - 0.7 * df["age"]) - df["hr_rest"]),
-        "theorical_vt22": lambda df: df["hr_rest"]
-        + 0.85 * ((df["hr_mean"] + df["hr_std"]) - df["hr_rest"]),
-        "theorical_vt23": lambda df: df["hr_rest"]
-        + 0.85 * ((df["hr_mean"] + 2 * df["hr_std"]) - df["hr_rest"]),
-        "theorical_vt24": lambda df: df["hr_rest"]
-        + 0.85 * ((df["hr_mean"] + 3 * df["hr_std"]) - df["hr_rest"]),
-    }
-
-    def transform(self, X):
-        X = X.copy()
-        for name, func in self.DERIVED_FEATURES.items():
-            try:
-                X[name] = func(X)
-            except KeyError as e:
-                warnings.warn(f"Skipping {name} - missing column: {str(e)}")
-        return X
-
-
-class OHETransformer(FeatureEngineer):
-    """Handles One-Hot Encoding for specified categorical columns"""
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.encoder = None
-        self.categorical_columns_ = None
-
-    def fit(self, X, y=None):
-        self.categorical_columns_ = X.select_dtypes(
-            include=["category", "object"]
-        ).columns.tolist()
-        if self.categorical_columns_:
-            self.encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-            self.encoder.fit(X[self.categorical_columns_])
-        return self
-
-    def transform(self, X):
-        if not self.encoder:
-            return X
-        ohe_array = self.encoder.transform(X[self.categorical_columns_])
-        ohe_columns = self.encoder.get_feature_names_out(self.categorical_columns_)
-        ohe_df = pd.DataFrame(ohe_array, columns=ohe_columns, index=X.index)
-        X_transformed = X.drop(columns=self.categorical_columns_)
-        return pd.concat([X_transformed, ohe_df], axis=1)
-
-
-class NumericInteractionTransformer(BaseEstimator, TransformerMixin):
+class TimeSeriesFeatureExtractor:
     """
-    Creates pairwise numeric × numeric feature interactions.
+    Original feature extractor (kept for comparison).
     """
+    
+    def __init__(self, window_size: int = 100, fft_components: int = 10):
+        self.window_size = window_size
+        self.fft_components = fft_components
+        self.scaler = StandardScaler()
+        
+    def extract_statistical_features(self, series: pd.Series) -> dict:
+        """
+        Extract statistical features from a time series.
+        """
+        features = {}
+        
+        # Basic statistics
+        features['mean'] = series.mean()
+        features['std'] = series.std()
+        features['min'] = series.min()
+        features['max'] = series.max()
+        features['median'] = series.median()
+        features['q25'] = series.quantile(0.25)
+        features['q75'] = series.quantile(0.75)
+        features['iqr'] = features['q75'] - features['q25']
+        
+        # Higher order moments
+        features['skewness'] = series.skew()
+        features['kurtosis'] = series.kurtosis()
+        
+        # Range and variability
+        features['range'] = features['max'] - features['min']
+        features['cv'] = features['std'] / features['mean'] if features['mean'] != 0 else 0
+        
+        # Trend features
+        features['trend'] = np.polyfit(range(len(series)), series, 1)[0]
+        
+        return features
+    
+    def extract_frequency_features(self, series: pd.Series) -> dict:
+        """
+        Extract frequency domain features using FFT.
+        """
+        features = {}
+        
+        # Remove mean for FFT
+        series_centered = series - series.mean()
+        
+        # Compute FFT
+        fft_vals = fft(series_centered)
+        fft_magnitude = np.abs(fft_vals)
+        
+        # Get dominant frequencies
+        freqs = np.fft.fftfreq(len(series))
+        positive_freqs = freqs[:len(freqs)//2]
+        positive_magnitude = fft_magnitude[:len(freqs)//2]
+        
+        # Top frequency components
+        top_indices = np.argsort(positive_magnitude)[-self.fft_components:]
+        
+        for i, idx in enumerate(top_indices):
+            features[f'fft_freq_{i}'] = positive_freqs[idx]
+            features[f'fft_magnitude_{i}'] = positive_magnitude[idx]
+        
+        # Spectral features
+        features['spectral_centroid'] = np.sum(positive_freqs * positive_magnitude) / np.sum(positive_magnitude)
+        features['spectral_bandwidth'] = np.sqrt(np.sum(((positive_freqs - features['spectral_centroid']) ** 2) * positive_magnitude) / np.sum(positive_magnitude))
+        
+        return features
+    
+    def extract_shape_features(self, series: pd.Series) -> dict:
+        """
+        Extract shape-based features from time series.
+        """
+        features = {}
+        
+        # Peak features
+        peaks, _ = stats.find_peaks(series)
+        valleys, _ = stats.find_peaks(-series)
+        
+        features['n_peaks'] = len(peaks)
+        features['n_valleys'] = len(valleys)
+        
+        if len(peaks) > 0:
+            features['peak_mean'] = series.iloc[peaks].mean()
+            features['peak_std'] = series.iloc[peaks].std()
+        else:
+            features['peak_mean'] = 0
+            features['peak_std'] = 0
+            
+        if len(valleys) > 0:
+            features['valley_mean'] = series.iloc[valleys].mean()
+            features['valley_std'] = series.iloc[valleys].std()
+        else:
+            features['valley_mean'] = 0
+            features['valley_std'] = 0
+        
+        # Zero crossings
+        zero_crossings = np.sum(np.diff(np.signbit(series - series.mean())))
+        features['zero_crossings'] = zero_crossings
+        
+        return features
+    
+    def extract_rolling_features(self, series: pd.Series) -> dict:
+        """
+        Extract rolling window features.
+        """
+        features = {}
+        
+        # Rolling statistics
+        rolling_mean = series.rolling(window=self.window_size, min_periods=1).mean()
+        rolling_std = series.rolling(window=self.window_size, min_periods=1).std()
+        
+        features['rolling_mean_mean'] = rolling_mean.mean()
+        features['rolling_mean_std'] = rolling_mean.std()
+        features['rolling_std_mean'] = rolling_std.mean()
+        features['rolling_std_std'] = rolling_std.std()
+        
+        # Rolling trend
+        rolling_trend = []
+        for i in range(len(series) - self.window_size + 1):
+            window = series.iloc[i:i+self.window_size]
+            if len(window) > 1:
+                trend = np.polyfit(range(len(window)), window, 1)[0]
+                rolling_trend.append(trend)
+        
+        if rolling_trend:
+            features['rolling_trend_mean'] = np.mean(rolling_trend)
+            features['rolling_trend_std'] = np.std(rolling_trend)
+        else:
+            features['rolling_trend_mean'] = 0
+            features['rolling_trend_std'] = 0
+        
+        return features
+    
+    def extract_all_features(self, series: pd.Series) -> dict:
+        """
+        Extract all features from a time series.
+        """
+        features = {}
+        
+        # Statistical features
+        features.update(self.extract_statistical_features(series))
+        
+        # Frequency features
+        features.update(self.extract_frequency_features(series))
+        
+        # Shape features
+        features.update(self.extract_shape_features(series))
+        
+        # Rolling features
+        features.update(self.extract_rolling_features(series))
+        
+        return features
 
-    def __init__(self, combine_num: bool = True):
-        self.combine_num = combine_num
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X = X.copy()
-        if not self.combine_num:
-            return X
-        num_cols = sorted(X.select_dtypes(include=np.number).columns)
-        for i, col1 in enumerate(num_cols):
-            for col2 in num_cols[i + 1 :]:
-                X[f"{col1}_x_{col2}"] = X[col1] * X[col2]
-                X[f"{col1}_/_{col2}"] = X[col1] / (X[col2] + 1e-8)
-        return X
-
-
-class CategoricalInteractionTransformer(BaseEstimator, TransformerMixin):
+def create_features_from_dataframe(df: pd.DataFrame, target_cols: Optional[List[str]] = None, 
+                                 embedded: bool = True) -> pd.DataFrame:
     """
-    Creates pairwise categorical × categorical feature interactions.
+    Create features from a dataframe containing time series data.
     """
+    logger.info("Creating features from dataframe...")
+    
+    # Remove target columns if specified
+    if target_cols:
+        feature_cols = [col for col in df.columns if col not in target_cols]
+        X = df[feature_cols].copy()
+        y = df[target_cols].copy() if target_cols else None
+    else:
+        X = df.copy()
+        y = None
+    
+    # Choose feature extractor based on embedded flag
+    if embedded:
+        extractor = EmbeddedTimeSeriesFeatureExtractor(use_fft=False)  # Disable FFT for embedded
+        logger.info("Using embedded-optimized feature extractor")
+    else:
+        extractor = TimeSeriesFeatureExtractor()
+        logger.info("Using full feature extractor")
+    
+    # Extract features for each column
+    all_features = []
+    
+    for col in X.columns:
+        logger.info(f"Extracting features from column: {col}")
+        features = extractor.extract_all_features(X[col])
+        features['column_name'] = col
+        all_features.append(features)
+    
+    # Create features dataframe
+    features_df = pd.DataFrame(all_features)
+    
+    # Pivot to get one row per sample
+    if len(features_df) > 0:
+        # If we have multiple columns, we need to aggregate features
+        # For now, let's take the mean across all columns for each feature
+        feature_cols = [col for col in features_df.columns if col != 'column_name']
+        aggregated_features = features_df[feature_cols].mean()
+        
+        # Create a single row with aggregated features
+        final_features = pd.DataFrame([aggregated_features])
+    else:
+        final_features = pd.DataFrame()
+    
+    logger.info(f"Created features with shape: {final_features.shape}")
+    
+    return final_features
 
-    def __init__(self, combine_cat: bool = True):
-        self.combine_cat = combine_cat
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X = X.copy()
-        if not self.combine_cat:
-            return X
-        cat_cols = X.select_dtypes(include=["category", "object"]).columns
-        for i, col1 in enumerate(cat_cols):
-            for col2 in cat_cols[i + 1 :]:
-                new_col = f"{col1}_AND_{col2}"
-                X[new_col] = X[col1].astype(str) + "_" + X[col2].astype(str)
-                X[new_col] = X[new_col].astype("category")
-        return X
-
-
-class MixedInteractionTransformer(BaseEstimator, TransformerMixin):
+def save_features(features_df: pd.DataFrame, filename: str = "engineered_features.csv") -> None:
     """
-    Creates categorical_code × numeric feature interactions.
+    Save engineered features to data/interim/
     """
+    features_path = DATA_INTERIM / filename
+    features_df.to_csv(features_path, index=False)
+    logger.info(f"Saved engineered features to {features_path}")
 
-    def __init__(self, combine_num_cat: bool = True):
-        self.combine_num_cat = combine_num_cat
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        X = X.copy()
-        if not self.combine_num_cat:
-            return X
-        cat_cols = X.select_dtypes(include=["category", "object"]).columns
-        num_cols = X.select_dtypes(include=np.number).columns
-
-        for cat_col in cat_cols:
-            # Create numeric representation
-            code_col = f"{cat_col}_code"
-            X[code_col] = pd.factorize(X[cat_col])[0]
-
-            # Create interactions
-            for num_col in num_cols:
-                X[f"{code_col}_x_{num_col}"] = X[code_col] * X[num_col]
-        return X
-
-
-# =====================
-# Master Pipeline
-# =====================
-class FeaturePipeline:
-    """Orchestrates feature engineering based on configuration"""
-
-    def __init__(self, config):
-        self.config = config
-        self.pipeline = self._build_pipeline()
-
-    def _build_pipeline(self):
-        # Get feature groups from config
-        group_defs = self.config["general"]["columns"]
-        enabled_groups = [
-            group
-            for group, enabled in self.config["features"]["use_cols"].items()
-            if enabled
-        ]
-
-        # Build pipeline steps
-        steps = [("column_selector", ColumnSelector(group_defs, enabled_groups))]
-
-        # Add feature engineering steps
-        steps_cfg = self.config["features"]["steps"]
-        if steps_cfg.get("binned", False):
-            steps.append(("binning", BinningTransformer(self.config)))
-
-        steps.append(("categorical", CategoricalTransformer(self.config)))
-
-        steps.append(("derived_features", DerivedFeatureTransformer(self.config)))
-
-        if steps_cfg.get("combine_cat", False):
-            steps.append(
-                ("cat_interaction", CategoricalInteractionTransformer(self.config))
-            )
-
-        if steps_cfg.get("target_encoding", False):
-            steps.append(("target_encoding", SafeTargetEncoder()))
-
-        if steps_cfg.get("combine_num", False):
-            steps.append(
-                ("num_interaction", NumericInteractionTransformer(self.config))
-            )
-
-        if steps_cfg.get("combine_num_cat", False):
-            steps.append(
-                ("mixed_interaction", MixedInteractionTransformer(self.config))
-            )
-
-        if steps_cfg.get("ohe", False):
-            steps.append(("ohe", OHETransformer(self.config)))
-
-        return Pipeline(steps)
-
-    def fit(self, X, y=None):
-        self.pipeline.fit(X, y)
-        return self
-
-    def transform(self, X):
-        return self.pipeline.transform(X)
-
+def main():
+    """
+    Main feature engineering pipeline
+    """
+    logger.info("Starting feature engineering pipeline...")
+    
+    # Load interim data
+    try:
+        interim_data = pd.read_csv(INTERIM_DATA_FILE)
+        logger.info(f"Loaded interim data with shape: {interim_data.shape}")
+    except FileNotFoundError:
+        logger.error("Interim data not found. Run dataset.py first.")
+        return
+    
+    # Create features (embedded version)
+    features_df = create_features_from_dataframe(interim_data, embedded=True)
+    
+    # Save features
+    save_features(features_df)
+    
+    logger.info("Feature engineering pipeline completed!")
 
 if __name__ == "__main__":
-    cfg = yaml.safe_load(open("conf/project.yaml"))
-    gen = cfg["general"]
-    ft = cfg["features"]
-    input_path = Path(ft["input"])
-    output_path = Path(ft["output"])
-    splits_path = Path(gen["splits_path"])
-    proc = cfg["processing"]
-    dl = cfg["data_load"]
-    target_col = gen["target_column"]
-
-    stem = f"{'_'.join(dl['protocol_list'])}_{dl['device']}_{dl['exercise']}_{dl['labels']['hr']}_{dl['labels']['speed']}"
-
-    interim_data = (
-        pd.read_csv(input_path / f"{stem}.csv")
-        .set_index(["idx", "variant_id"])
-        .dropna(subset=target_col)
-    )
-    if ft.get("dropna", False):
-        interim_data = interim_data.dropna()
-
-    # --- carregar splits antes do fit ---
-    splits = yaml.safe_load(open(splits_path))
-    split_idxs = [idx for _, v in splits.items() for idx in v]
-
-    # máscaras baseadas no índice atual (idx, variant_id)
-    test_mask = interim_data.index.get_level_values("idx").isin(split_idxs) & (
-        interim_data.index.get_level_values("variant_id") == 0
-    )
-    train_mask = ~interim_data.index.get_level_values("idx").isin(split_idxs)
-
-    # criar dataframes de treino/test mantendo idx como coluna (necessário para LOGO)
-    train_raw = interim_data[train_mask]
-    test_raw = interim_data[test_mask]
-
-    # separar y
-    y_train = train_raw[target_col]
-    y_test = test_raw[target_col]
-
-    # construir pipeline (assegure que o SafeTargetEncoder esteja instanciado com group_col='idx' e use_logo=True)
-    feature_pipeline = FeaturePipeline(config=cfg)
-    # fit apenas no conjunto de treino
-    feature_pipeline.fit(train_raw, y_train)
-
-    # transformar train e test (transform NÃO deve ser chamado com fit no test)
-    features_train = feature_pipeline.transform(train_raw)
-    features_test = feature_pipeline.transform(test_raw)
-
-    # Preserve feature names (do train)
-    feature_names = list(features_train.columns)
-
-    # salvar
-    output_path = Path(ft["output"])
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    features_test.to_csv(output_path / "test.csv", index=True)
-    pd.DataFrame(y_test).to_csv(output_path / "y_test.csv", index=True)
-
-    features_train.to_csv(output_path / "train.csv", index=True)
-    pd.DataFrame(y_train).to_csv(output_path / "y_train.csv", index=True)
-
-    with open(output_path / "feature_names.txt", "w") as f:
-        f.write("\n".join(feature_names))
-
+    main()

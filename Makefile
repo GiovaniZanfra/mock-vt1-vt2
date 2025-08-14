@@ -7,25 +7,20 @@ PYTHON_VERSION = 3.10
 PYTHON_INTERPRETER = python
 
 #################################################################################
-# COMMANDS                                                                      #
+# COMMANDS                                                                       #
 #################################################################################
-
 
 ## Install Python dependencies
 .PHONY: requirements
 requirements:
 	$(PYTHON_INTERPRETER) -m pip install -U pip
 	$(PYTHON_INTERPRETER) -m pip install -r requirements.txt
-	
-
-
 
 ## Delete all compiled Python files
 .PHONY: clean
 clean:
 	find . -type f -name "*.py[co]" -delete
 	find . -type d -name "__pycache__" -delete
-
 
 ## Lint using ruff (use `make format` to do formatting)
 .PHONY: lint
@@ -39,29 +34,53 @@ format:
 	ruff check --fix
 	ruff format
 
-
-
-
-
 ## Set up Python interpreter environment
 .PHONY: create_environment
 create_environment:
 	@bash -c "if [ ! -z `which virtualenvwrapper.sh` ]; then source `which virtualenvwrapper.sh`; mkvirtualenv $(PROJECT_NAME) --python=$(PYTHON_INTERPRETER); else mkvirtualenv.bat $(PROJECT_NAME) --python=$(PYTHON_INTERPRETER); fi"
 	@echo ">>> New virtualenv created. Activate with:\nworkon $(PROJECT_NAME)"
-	
-
-
 
 #################################################################################
 # PROJECT RULES                                                                 #
 #################################################################################
 
-
-## Make dataset
+## Make dataset - process raw data
 .PHONY: data
 data: requirements
 	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py
 
+## Create features from processed data
+.PHONY: features
+features: data
+	$(PYTHON_INTERPRETER) -m mock_vt1_vt2.features
+
+## Train models
+.PHONY: train
+train: features
+	$(PYTHON_INTERPRETER) -m mock_vt1_vt2.modeling.train
+
+## Make predictions
+.PHONY: predict
+predict: train
+	$(PYTHON_INTERPRETER) -m mock_vt1_vt2.modeling.predict
+
+## Create visualizations
+.PHONY: plots
+plots: data
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/plots.py
+
+## Run complete pipeline
+.PHONY: pipeline
+pipeline: requirements data features train predict plots
+	@echo "Complete pipeline executed successfully!"
+
+## Clean all generated data
+.PHONY: clean_data
+clean_data:
+	rm -rf data/processed/*
+	rm -rf data/interim/*
+	rm -rf models/*
+	rm -rf reports/figures/*
 
 #################################################################################
 # Self Documenting Commands                                                     #

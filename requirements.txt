@@ -29,6 +29,9 @@ ruff
 tqdm
 typer
 
+# MLflow for experiment tracking
+mlflow>=2.0.0
+
 # Optional: SHAP for advanced feature importance
 # shap>=0.41.0
 
