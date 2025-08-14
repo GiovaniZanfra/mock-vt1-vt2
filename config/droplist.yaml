@@ -1,0 +1,65 @@
+drop:
+  - 2367-obk1-202401191050 #Only BMI class "Underweight" and abnormally high AT value
+  - 3301-obk1-202502071506 #Cannot calculate features from speed
+  - 3235-obk1-202412301420 #Cannot calculate features from speed
+  - 3374-obk1-202503281022 #Speed mean = 0
+  - 3366-obk1-202503311101 #Speed mean = 0
+  - 1480-obk1-202311101039 # at ant hrmax inconsistentes at=172, ant=172, hrmax=172
+  - 1713-obk1-202311101113 # at ant hrmax inconsistentes at=166, ant=166, hrmax=166
+  - 2310-obk1-202312201015 # at ant hrmax inconsistentes at=178, ant=178, hrmax=178
+  - 2361-obk1-202401171523 # at ant hrmax inconsistentes at=150, ant=150, hrmax=150
+  - 2402-obk1-202401261607 # at ant hrmax inconsistentes at=177, ant=177, hrmax=179
+  - 2365-obk1-202401311055 # at ant hrmax inconsistentes at=161, ant=161, hrmax=161
+  - 2498-obk1-202403081536 # at ant hrmax inconsistentes at=170, ant=170, hrmax=171
+  - 2713-obk1-202407031603 # at ant hrmax inconsistentes at=162, ant=164, hrmax=163
+  - 3153-obk1-202411121039 # at ant hrmax inconsistentes at=155, ant=126, hrmax=156
+  - 3318-obk1-202502210959 # at ant hrmax inconsistentes at=156, ant=129, hrmax=161
+  # #### DROPPING TOP HALF
+  # - 2428-obk1-202402071514
+  # - 2256-obk1-202312121453
+  # - 2578-obk1-202409231023
+  # - 3224-obk1-202412301010
+  # - 1533-obk1-202312131448
+  # - 3286-obk1-202502111011
+  # - 2137-obk1-202409091028
+  # - 1929-obk1-202311101506
+  # - 2422-obk1-202402061514
+  # - 2839-obk1-202408201124
+  # - 1462-obk1-202312061023
+  # - 1995-obk1-202312181453
+  # - 2109-obk1-202409111511
+  # - 1964-obk1-202312131022
+  # - 2901-obk1-202501061430
+  # - 1324-obk1-202407301045
+  # - 2433-obk1-202412131112
+  # - 1365-obk1-202411111118
+  # - 3225-obk1-202501231542
+  # - 3273-obk1-202501171009
+  # - 1546-obk1-202312061443
+  # - 2395-obk1-202402021052
+  # - 2424-obk1-202402051107
+  # - 1913-obk1-202408211111
+  # - 2398-obk1-202402141508
+  # - 2343-obk1-202401121043
+  # - 3291-obk1-202502071011
+  # - 2349-obk1-202402091056
+  # - 2712-obk1-202407171101
+  # - 2018-obk1-202311281525
+  # - 2023-obk1-202411251511
+  # - 1513-obk1-202311301044
+  # - 2344-obk1-202401121042
+  # - 1446-obk1-202311161117
+  # - 3276-obk1-202502121643
+  # - 2503-obk1-202403111105
+  # - 2408-obk1-202401291111
+  # - 2348-obk1-202401051447
+  # - 1889-obk1-202312131455
+  # - 3317-obk1-202502111133
+  # - 3216-obk1-202412231018
+  # - 2642-obk1-202408011434
+  # - 3323-obk1-202503141621
+  # - 2312-obk1-202312291430
+  # - 2537-obk1-202409131121
+  # - 1994-obk1-202311281034
+  # - 2501-obk1-202403131101
+  # - 2360-obk1-202401151040
