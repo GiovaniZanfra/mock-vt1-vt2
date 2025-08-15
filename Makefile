@@ -51,7 +51,6 @@ create_environment:
 	
 
 
-
 #################################################################################
 # PROJECT RULES                                                                 #
 #################################################################################
@@ -60,7 +59,7 @@ create_environment:
 ## Make dataset
 .PHONY: data
 data: requirements
-	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config /workspace/config/dataset.yaml
 
 
 #################################################################################
