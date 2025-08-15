@@ -1,0 +1,60 @@
+# Dataset Configuration
+# This file configures the dataset loading and processing parameters
+
+# Root directory containing the dataset
+root: "data/raw"
+
+# Subfolder containing the V3 data files (CSV files)
+v3_subfolder: "v3"
+
+# Subfolder containing metadata files (Parquet files)
+metadata_subfolder: "metadata"
+
+# List of protocols to filter by
+# These should match the protocol part of your idx (e.g., "vt1", "vt2")
+protocols:
+  - "vt1"
+  - "vt2"
+
+# Heart rate column names to extract from CSV files
+# The script will try these column names in order until it finds one
+hr_columns:
+  - "hr"
+  - "heart_rate"
+  - "HR"
+  - "HeartRate"
+
+# Speed column names to extract from CSV files
+# The script will try these column names in order until it finds one
+speed_columns:
+  - "speed"
+  - "Speed"
+  - "velocity"
+  - "Velocity"
+
+# Optional: Output configuration
+output:
+  # Directory to save processed data
+  processed_dir: "data/processed"
+  # Filename for the processed dataset
+  filename: "processed_dataset.parquet"
+  # Whether to save intermediate results
+  save_intermediate: true
+
+# Optional: Data validation settings
+validation:
+  # Minimum number of data points required for HR series
+  min_hr_points: 10
+  # Minimum number of data points required for speed series
+  min_speed_points: 10
+  # Whether to log warnings for missing data
+  log_missing_data: true
+
+# Optional: Processing settings
+processing:
+  # Whether to normalize HR values (0-1 range)
+  normalize_hr: false
+  # Whether to normalize speed values (0-1 range)
+  normalize_speed: false
+  # Whether to interpolate missing values
+  interpolate_missing: false

@@ -47,7 +47,30 @@ create_environment:
 ## Make dataset - process raw data
 .PHONY: data
 data: requirements
-	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config config/dataset.yaml --save
+
+## Load dataset with custom config
+.PHONY: data-custom
+data-custom: requirements
+	@echo "Usage: make data-custom CONFIG=path/to/config.yaml"
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config $(CONFIG) --save
+
+## Load dataset without saving (for testing)
+.PHONY: data-test
+data-test: requirements
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config config/dataset.yaml
+
+## Load dataset with specific protocols
+.PHONY: data-vt1
+data-vt1: requirements
+	@echo "Loading VT1 protocol only..."
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config config/dataset.yaml --save --output-file vt1_dataset.parquet
+
+## Load dataset with specific protocols
+.PHONY: data-vt2
+data-vt2: requirements
+	@echo "Loading VT2 protocol only..."
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config config/dataset.yaml --save --output-file vt2_dataset.parquet
 
 ## Create features from processed data
 .PHONY: features
@@ -81,6 +104,23 @@ clean_data:
 	rm -rf data/interim/*
 	rm -rf models/*
 	rm -rf reports/figures/*
+
+## Validate dataset configuration
+.PHONY: validate-config
+validate-config:
+	@echo "Validating dataset configuration..."
+	$(PYTHON_INTERPRETER) -c "from mock_vt1_vt2.dataset import _load_config; config = _load_config('config/dataset.yaml'); print('✅ Configuration loaded successfully'); print(f'Protocols: {config.get(\"protocols\", [])}'); print(f'HR columns: {config.get(\"hr_columns\", [])}'); print(f'Speed columns: {config.get(\"speed_columns\", [])}')"
+
+## Show dataset statistics
+.PHONY: data-stats
+data-stats: data-test
+	@echo "Dataset statistics displayed above"
+
+## Create backup of current config
+.PHONY: backup-config
+backup-config:
+	@cp config/dataset.yaml config/dataset.yaml.backup.$(shell date +%Y%m%d_%H%M%S)
+	@echo "Configuration backed up with timestamp"
 
 #################################################################################
 # Self Documenting Commands                                                     #
