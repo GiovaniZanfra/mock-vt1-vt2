@@ -1,0 +1,57 @@
+# Timeseries Summarization Configuration
+# This file configures the timeseries summarization processing pipeline
+
+# Main algorithm to use for processing
+# Options: "ftp_cycling", "vo2max_cycling", "basic_moving_average"
+algorithm: "basic_moving_average"
+
+# General processing parameters
+window_size: 30
+
+# Output directory for processed data
+output_dir: "data/interim"
+
+# Algorithm-specific parameters
+algorithm_params:
+  # Verbose logging for legacy algorithms
+  verbose: false
+  
+  # Basic moving average specific parameters
+  window_size: 30
+  include_percentiles: true
+  
+  # Legacy algorithm parameters (if using ftp_cycling or vo2max_cycling)
+  legacy:
+    # Minimum data points required
+    min_data_points: 30
+    # Whether to apply filtering
+    apply_filtering: true
+    # Percentile for feature computation
+    percentile: 0.75
+
+# Data validation settings
+validation:
+  # Minimum number of data points required
+  min_series_length: 30
+  # Maximum allowed missing values percentage
+  max_missing_pct: 0.3
+  # Whether to log warnings for data quality issues
+  log_data_quality: true
+
+# Processing options
+processing:
+  # Whether to save intermediate results
+  save_intermediate: true
+  # Whether to include original metadata
+  include_metadata: true
+  # Whether to validate data before processing
+  validate_data: true
+
+# Output formatting
+output:
+  # File format for output
+  format: "parquet"
+  # Whether to include algorithm name in output
+  include_algorithm_info: true
+  # Whether to compress output files
+  compress: false

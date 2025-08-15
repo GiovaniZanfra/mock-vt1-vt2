@@ -59,24 +59,103 @@ speed_columns:
   - "speed"
 ```
 
-## Environment Variables
+### `summarization.yaml`
 
-You can override the config file path using the `DATASET_CONFIG` environment variable:
+Configuration file for timeseries summarization processing.
 
-```bash
-export DATASET_CONFIG=/path/to/your/config.yaml
+#### Key Parameters
+
+- **`algorithm`**: Processing algorithm to use
+  - `"ftp_cycling"`: Legacy FTP cycling algorithm
+  - `"vo2max_cycling"`: Legacy VO2max cycling algorithm  
+  - `"basic_moving_average"`: New basic moving average algorithm
+- **`window_size`**: Window size for moving average calculations
+- **`output_dir`**: Directory to save interim processed data
+- **`algorithm_params`**: Algorithm-specific parameters
+
+#### Usage
+
+```python
+from mock_vt1_vt2.timeseries_summarization import process_raw_to_interim
+
+# Process raw data to interim features
+output_path = process_raw_to_interim(
+    raw_data_path="data/processed/processed_dataset.parquet",
+    config_path="config/summarization.yaml"
+)
 ```
 
-## Running the Dataset Loader
+#### Algorithm Examples
 
-Use the provided script to load your dataset:
+**FTP Cycling Algorithm:**
+```yaml
+algorithm: "ftp_cycling"
+algorithm_params:
+  verbose: false
+  legacy:
+    min_data_points: 30
+    apply_filtering: true
+    percentile: 0.75
+```
+
+**VO2max Cycling Algorithm:**
+```yaml
+algorithm: "vo2max_cycling"
+algorithm_params:
+  verbose: true
+  legacy:
+    min_data_points: 30
+    apply_filtering: true
+    percentile: 0.75
+```
+
+**Basic Moving Average Algorithm:**
+```yaml
+algorithm: "basic_moving_average"
+window_size: 30
+algorithm_params:
+  window_size: 30
+  include_percentiles: true
+```
+
+## Environment Variables
+
+You can override config file paths using environment variables:
 
 ```bash
-python scripts/load_dataset.py
+# Dataset config
+export DATASET_CONFIG=/path/to/your/dataset.yaml
+
+# Summarization config
+export SUMMARIZATION_CONFIG=/path/to/your/summarization.yaml
+```
+
+## Running the Pipeline
+
+### Dataset Loading
+```bash
+make data
+```
+
+### Timeseries Summarization
+```bash
+# Use default algorithm from config
+make summarize
+
+# Use specific algorithms
+make summarize-ftp
+make summarize-vo2max
+make summarize-basic
+```
+
+### Complete Pipeline
+```bash
+# Run complete pipeline including summarization
+make pipeline
 ```
 
 This will:
-1. Load the configuration from `config/dataset.yaml`
-2. Process the dataset according to your settings
-3. Display statistics about the loaded data
-4. Optionally save the processed dataset to `data/processed/`
+1. Load the dataset using `config/dataset.yaml`
+2. Process timeseries data using `config/summarization.yaml`
+3. Generate features and models
+4. Create visualizations

@@ -72,9 +72,33 @@ data-vt2: requirements
 	@echo "Loading VT2 protocol only..."
 	$(PYTHON_INTERPRETER) mock_vt1_vt2/dataset.py --config config/dataset.yaml --save --output-file vt2_dataset.parquet
 
+## Process raw data to interim features
+.PHONY: summarize
+summarize: data
+	@echo "Processing raw data to interim features..."
+	$(PYTHON_INTERPRETER) mock_vt1_vt2/timeseries_summarization.py --raw-data data/processed/processed_dataset.parquet --config config/summarization.yaml
+
+## Process with specific algorithm
+.PHONY: summarize-ftp
+summarize-ftp: data
+	@echo "Processing with FTP cycling algorithm..."
+	$(PYTHON_INTERPRETER) -c "import yaml; config = yaml.safe_load(open('config/summarization.yaml')); config['algorithm'] = 'ftp_cycling'; yaml.dump(config, open('config/summarization_ftp.yaml', 'w')); from mock_vt1_vt2.timeseries_summarization import process_raw_to_interim; process_raw_to_interim('data/processed/processed_dataset.parquet', 'config/summarization_ftp.yaml')"
+
+## Process with VO2max algorithm
+.PHONY: summarize-vo2max
+summarize-vo2max: data
+	@echo "Processing with VO2max cycling algorithm..."
+	$(PYTHON_INTERPRETER) -c "import yaml; config = yaml.safe_load(open('config/summarization.yaml')); config['algorithm'] = 'vo2max_cycling'; yaml.dump(config, open('config/summarization_vo2max.yaml', 'w')); from mock_vt1_vt2.timeseries_summarization import process_raw_to_interim; process_raw_to_interim('data/processed/processed_dataset.parquet', 'config/summarization_vo2max.yaml')"
+
+## Process with basic moving average
+.PHONY: summarize-basic
+summarize-basic: data
+	@echo "Processing with basic moving average algorithm..."
+	$(PYTHON_INTERPRETER) -c "import yaml; config = yaml.safe_load(open('config/summarization.yaml')); config['algorithm'] = 'basic_moving_average'; yaml.dump(config, open('config/summarization_basic.yaml', 'w')); from mock_vt1_vt2.timeseries_summarization import process_raw_to_interim; process_raw_to_interim('data/processed/processed_dataset.parquet', 'config/summarization_basic.yaml')"
+
 ## Create features from processed data
 .PHONY: features
-features: data
+features: summarize
 	$(PYTHON_INTERPRETER) -m mock_vt1_vt2.features
 
 ## Train models
